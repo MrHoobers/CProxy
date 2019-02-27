@@ -18,7 +18,7 @@
 extern char *replace(char *str, int *str_len, const char *src, const int src_len, const char *dest, const int dest_len);
 extern void error(const char *msg);
 extern int udp_listen(char *ip, int port);
-extern void dataEncode(char *data, int data_len, int8_t code);
+extern void dataEncode(char *data, int data_len, unsigned code);
 extern int8_t copy_new_mem(char *src, int src_len, char **dest);
 
 #endif

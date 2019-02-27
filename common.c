@@ -77,7 +77,7 @@ char *replace(char *replace_memory, int *replace_memory_len, const char *src, co
 }
 
 /* 对数据进行编码 */
-void dataEncode(char *data, int data_len, int8_t code)
+void dataEncode(char *data, int data_len, unsigned code)
 {
     while (data_len-- > 0)
         data[data_len] ^= code;

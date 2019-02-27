@@ -31,9 +31,9 @@ struct modify {
 struct tcp_mode {
     struct sockaddr_in dst;
     struct modify *m;
-    int8_t encodeCode;  //wap_connect模式数据编码传输
-    unsigned uri_strict :1;
-    unsigned http_only_get_post :1;
+    unsigned encodeCode,  //wap_connect模式数据编码传输
+        uri_strict :1,
+        http_only_get_post :1;
 };
 
 extern void *save_header_timer(void *nullPtr);
