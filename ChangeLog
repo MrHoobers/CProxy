@@ -53,6 +53,7 @@ CProxy v1.2 (2017-04-04)
     wap_connect支持原始请求直接发送到监听地址
 
 CProxy v1.3 (2017-06-04)
+    改用epoll非阻塞模型
     添加strict语法
     恢复procs语法
     优化删除头域和获取host代码
@@ -73,11 +74,35 @@ CProxy v1.6 (2018-11-23)
     添加HTTPUDP
     修复部分内存泄露
 
-CProxy v1.7 (2018-12-12)
+CProxy v1.7 (2018-12-07)
     修复崩溃现象(待测)
     优化TCP处理
     修复1.6进后台出现文件下载现象
     httpDNS和httpUDP添加编码过GFW功能，更好地配合翻墙软件，需要httpDNS和httpUDP服务端支持
-    添加restart命令，用法: CProxy restart CProxy.conf
     httpDNS: https://github.com/mmmdbybyd/httpDNS
     httpUDP: http://cproxy.saomeng.club/static/udpServer.c
+
+CProxy v1.8 (2019-01-05)
+    添加\0支持
+    后台页面添加httpDNS httpUDP请求头显示
+    添加功能: 保存请求头中头域的值，save_hdr语法和use_hdr()关键字
+    global模块添加timeout语法，默认不超时
+    修复有时服务端的数据不转发到客户端
+    http模块添加strict_uri语法，开启则将uri中多个连续的/替换成一个/
+    regrep添加关键字\\b，匹配正则表达式中的\b而非c语言的\b
+    wap_connect添加编码功能(接入点必须留空, 不能进后台)，需要服务端SpecialProxy配合(效率不比v2 ssr差)
+        SpecialProxy: https://github.com/mmmdbybyd/SpecialProxy
+
+CProxy 1.9 (2019-02-18)
+    添加TCPDNS支持
+    优化超时计时
+    修改dns缓存结构，支持所有dns类型缓存(不与之前的缓存文件兼容)
+    修复dns和udp偶尔出现addr语法混淆问题
+    自带CONNECT协议更规范
+
+CProxy 2.0
+    httpDNS和httpUDP使用http_req语法后，不受wap_connect和net_connect影响
+    wap_connect的编码加密支持CONNECT直接连接到监听端口
+    修复TCPDNS在编码模式下错误缓存
+    支持TCPDNS不做CONNECT代理(不使用tcp_listen或者http_req = "";)
+    兼容部分不规范的http协议，如果第四层的端口跟请求头Host端口不一致，[H]会自动修改为第四层的端口

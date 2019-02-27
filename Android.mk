@@ -8,4 +8,3 @@ LOCAL_MODULE_FILENAME = CProxy
 c_src_files = $(wildcard $(LOCAL_PATH)/*.c)
 LOCAL_SRC_FILES = $(c_src_files:$(LOCAL_PATH)/%=%)
 include $(BUILD_EXECUTABLE)
-NDK_TOOLCHAIN_VERSION=gcc #clang3.2

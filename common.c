@@ -1,12 +1,23 @@
 #include "common.h"
 
-struct sockaddr_in addr;
-socklen_t addr_len = sizeof(addr);
+//有些头文件不声明memmem
+void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 
 void error(const char *error_info)
 {
     fprintf(stderr, "%s\n\n", error_info);
     exit(1);
+}
+
+int8_t copy_new_mem(char *src, int src_len, char **dest)
+{
+    *dest = (char *)malloc(src_len + 1);
+    if (*dest == NULL)
+        return 1;
+    memcpy(*dest, src, src_len);
+    *((*dest)+src_len) = '\0';
+
+    return 0;
 }
 
 /* 字符串替换，replace_memory为可以用free释放的指针 */
@@ -75,11 +86,12 @@ void dataEncode(char *data, int data_len, int8_t code)
 /* 监听一个UDP接口 */
 int udp_listen(char *ip, int port)
 {
+    struct sockaddr_in addr;
     int fd, opt = 1;
 
     if ((fd=socket(AF_INET, SOCK_DGRAM, 0)) < 0)
     {
-        perror("udp socket()");
+        perror("udp socket");
         exit(1);
     }
     setsockopt(fd, SOL_IP, IP_TRANSPARENT, &opt, sizeof(opt));
@@ -90,7 +102,7 @@ int udp_listen(char *ip, int port)
     addr.sin_family = AF_INET;
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
     {
-        perror("udp bind()");
+        perror("udp bind");
         exit(1);
     }
 

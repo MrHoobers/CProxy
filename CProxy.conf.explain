@@ -1,12 +1,15 @@
-分为4个模块：global、http、https、httpdns
-http和https模块的set_first del_hdr strrep regrep语法从上往下执行
-set_first strrep regrep关键字: [M]，[H]，[U]，[url]，[V]，\0，\r，\n，\v，\f，\b，\t，\a。如果原本请求头含有关键字也会被替换
+分为5个模块：global、http、https、httpdns、httpudp
+encode语法：encode = number;对字符的ascii码加或者减number，使用时请避开特殊字符(推荐128-255)
+    tcp在https模块设置，只有wap_connect有效，编码域名以及传输的数据
+    httpDNS只编码域名和返回的ip
+    httpUDP编码传输的数据
+http和https模块的save_hdr set_first del_hdr strrep regrep语法从上往下执行
+set_first strrep regrep http_req关键字: use_hdr()，[M]，[H]，[U]，[url]，[V]，\0，\r，\n，\v，\f，\b，\t，\a。regrep关键字: \\b
 [M] 原请求方法
 [H] 原请求host
 [U] 原请求uri
 [url] 原请求url
 [V] 原请求协议版本
-[0] \0
 
 //全局模块
 global {
@@ -31,6 +34,9 @@ global {
 
     //严格修改请求头，对于一次读取数据连续的多个请求头（比如qq浏览器加载"看热点"），全部修改，默认只修改第一个请求头
     strict = on;
+    
+    //超时时间，单位：分，所有连接超出超时时间后，还没有收到客户端或者服务端的数据则关闭连接，默认不超时
+    timeout = 2;
 }
 
 //http模块
@@ -38,9 +44,13 @@ http {
     //普通http请求只留GET POST联网
     only_get_post = on;
 
-    //http端口，其他端口先建立CONNECT连接
-    http_port = 80,8080,10086;
+    //严格uri模式，把uri中连续的/替换成一个/，比如//cute////bi替换成/cute/bi
+    uri_strict = on;
 
+    //保存Q-GID头域  不区分大小写，6和1表示更新时间(单位: 分)，小于等于0实时更新
+    save_hdr = "Q-guid" -> "6";
+    save_hdr = "Q-token" -> "1";
+    
     // http目标地址
     addr = 10.0.0.172:80;
 
@@ -52,8 +62,8 @@ http {
     proxy_https_string = WebSocket;
     proxy_https_string = Upgrade:;
 
-    //设置首行
-    set_first = "[M] [U] [V]\r\n Host: rd.go.10086.cn\r\n";
+    //设置首行，use_hdr表示取之前获取的Q-guid和Q-token，此处区分大小写，要与save_hdr的对应
+    set_first = "[M] [U] [V]\r\n Host: rd.go.10086.cn\r\nQ-GUID: use_hdr(Q-guid)\r\nQ-Token: use_hdr(Q-token)\r\n";
     //字符串替换，区分大小写
     //strrep = "Host:" -> "Cloud:";
 
@@ -61,30 +71,37 @@ http {
     //regrep = "^Host:[^\n]*\n" -> "Meng: [H]\r\n";
 }
 
-//https模块，没有only_get_post, proxy_https_string，其他语法跟http一样
+//https模块，没有only_get_post, uri_strict, proxy_https_string，其他语法跟http一样
 https {
     addr = 10.0.0.172:80;
     del_hdr = host;
-    set_first = "CONNECT /rd.go.10086.cn HTTP/1.1\r\nHost: [H]\r\n";
+    set_first = "CONNECT /rd.go.10086.cn HTTP/1.1\r\nHost: [H]\r\nQ-GUID: use_hdr(Q-guid)\r\nQ-Token: use_hdr(Q-token)\r\n";
+    //wap_connect模式下才有效
+    //请求域名编码，国外服务器搭建SpecialProxy云免用
+    //代码128-255要与服务端一致，默认为0不编码
+    encode = 0;
 }
 
 //httpDNS模块
 httpdns {
-    //http请求目标地址
+    //工作模式，tcpDNS或httpDNS(默认)，tcpDNS同pdnsd解析方式，支持全面，httpDNS只支持域名查询ipv4
+    mode = tcpDNS/httpDNS;
+    //http请求目标地址，默认80端口，一般TCPDNS需要指定53端口
     addr = 182.254.118.118;
 
     //缓存路径，关闭的时候不要加-9，否则缓存无法写入缓存
+    //如果遇到启动失败可能是缓存文件写入错误导致，尝试删除缓存重试
     //cachePath = dns.cache;
 
     //限制缓存数目
     //cacheLimit = 64;
 
     //dns请求域名编码，国外服务器搭建httpDNS云免用
-    //代码1-127要与服务端一致，默认为0不编码
+    //代码128-255要与服务端一致，默认为0不编码
     encode = 0;
 
     //http请求头，不设置则用http模块修改后的默认请求，[D]为查询的域名
-    //http_req = "[M] http://rd.go.10086.cn/d?dn=[D] [V]\r\nHost: rd.go.10086.cn\r\nConnection: close\r\n\r\n";
+    //http_req = "[M] http://rd.go.10086.cn/d?dn=[D] [V]\r\nHost: rd.go.10086.cn\r\nConnection: close\r\nQ-GUID: use_hdr(Q-guid)\r\nQ-Token: use_hdr(Q-token)\r\n";
 }
 
 //httpUDP模块，默认使用HTTPS模块
@@ -93,9 +110,9 @@ httpudp {
     addr = 6.6.6.6:669;
 
     //httpUDP请求编码，国外服务器云免用
-    //代码1-127要与服务端一致，默认为0不编码
+    //代码128-255要与服务端一致，默认为0不编码
     encode = 0;
 
     //http请求，不设置则使用HTTPS模块修改后的请求
-    //http_req = "[M] / [V]\r\nHost: rd.go.10086.cn\r\n";
+    //http_req = "[M] / [V]\r\nHost: rd.go.10086.cn\r\nQ-GUID: use_hdr(Q-guid)\r\nQ-Token: use_hdr(Q-token)\r\n";
 }

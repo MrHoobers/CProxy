@@ -2,7 +2,7 @@
     HTTPUDP模块代理UDP过程:
         获取客户端UDP数据
         向服务器发送一个http请求头
-        收到服务端回应后发送数据到服务端，内容为: UDP原始目标地址[struct sockaddr_in](只有第一个数据包发送) + UDP长度[uint16_t] + UDP真实数据
+        收到服务端回应后发送数据到服务端，内容为: UDP原始目标地址[struct in_addr](只有第一个数据包发送) + UDP长度[uint16_t] + UDP真实数据
         服务端返回数据，数据内容为: UDP包的长度[uint16_t] + UDP真实数据
         新建一个socket伪装原目标地址向客户端发送返回的数据(此功能需要root，否则部分UDP代理不上，例如QQ语音)
 */
@@ -12,19 +12,19 @@
 #define MAX_CLIENT_INFO 512
 #define HTTP_RSP_SIZE 2048
 #define CLIENT_BUFFER_SIZE 65535  //如果可以   尽量一次性读完数据
-#define SERVER_BUFFER_SIZE 4096
+#define SERVER_BUFFER_SIZE 8192
 
 typedef struct connection_info {
     char client_data[CLIENT_BUFFER_SIZE + sizeof(struct sockaddr_in) + sizeof(uint16_t)];
     struct sockaddr_in inaddr, toaddr;
     struct connection_info *next;
     char *rsp_data;
-    int client_data_len, client_data_sent_len, http_request_sent_len, rsp_data_len, rsp_data_sent_len;
-    int server_fd, responseClientFd;
+    int client_data_len, client_data_sent_len, http_request_sent_len, rsp_data_len, rsp_data_sent_len, server_fd, responseClientFd, timer;
 } info_t;
 
 static info_t client_info_list[MAX_CLIENT_INFO];
 static struct epoll_event udp_evs[MAX_CLIENT_INFO * 2 + 2], udp_ev;
+struct httpudp udp;
 static int udp_efd;
 
 static void proxyStop(info_t *info)
@@ -39,6 +39,22 @@ static void proxyStop(info_t *info)
         info->server_fd = info->responseClientFd = -1;
         info->rsp_data_len = info->rsp_data_sent_len = info->client_data_sent_len = info->http_request_sent_len = 0;
     } while ((info = info->next) != NULL);
+}
+
+void udp_timeout_check()
+{
+    int i;
+
+    for (i = 0; i < MAX_CLIENT_INFO; i++)
+    {
+        if (client_info_list[i].server_fd > -1)
+        {
+            if (client_info_list[i].timer >= global.timeout_m)
+                proxyStop(client_info_list + i);
+            else
+                client_info_list[i].timer = 0;
+        }
+    }
 }
 
 /* 创建udpfd回应客户端 */
@@ -61,8 +77,8 @@ static int createRspFd(info_t *client)
     setegid(0);
     bind(client->responseClientFd, (struct sockaddr *)&client->toaddr, sizeof(struct sockaddr_in));
     //切换回用户设置的uid
-    setegid(conf.uid);
-    seteuid(conf.uid);
+    setegid(global.uid);
+    seteuid(global.uid);
 
     return 0;
 }
@@ -76,6 +92,7 @@ static int outputToClient(info_t *client)
     if (client->responseClientFd < 0 && createRspFd(client) < 0)
         return 1;
 
+    client->timer = 0;
     dataPtr = client->rsp_data;
     //至少要有一个完整的udp包才返回客户端
     while ((int)(*(uint16_t *)dataPtr + sizeof(uint16_t)) <= client->rsp_data_len)
@@ -122,8 +139,9 @@ static int outputToClient(info_t *client)
 /* 读取服务器的数据并返回给客户端 */
 static void recvServer(info_t *in)
 {
+    in->timer = 0;
     //当条件成立时表示未接收https回应状态码
-    if (conf.udp.http_request_len == in->http_request_sent_len)
+    if (udp.http_request_len == in->http_request_sent_len)
     {
         static char http_rsp[HTTP_RSP_SIZE];
         int read_len;
@@ -164,8 +182,10 @@ static void recvServer(info_t *in)
             read_len = 0;
             break;
         }
-        if (conf.udp.encodeCode)
-            dataEncode(in->rsp_data + in->rsp_data_len, read_len, conf.udp.encodeCode);
+        if (udp.httpsProxy_encodeCode)
+            dataEncode(in->rsp_data + in->rsp_data_len, read_len, udp.httpsProxy_encodeCode);
+        if (udp.encodeCode)
+            dataEncode(in->rsp_data + in->rsp_data_len, read_len, udp.encodeCode);
         in->rsp_data_len += read_len;
     } while (read_len == SERVER_BUFFER_SIZE);
     outputToClient(in);
@@ -177,11 +197,11 @@ static int sendToServer(info_t *out)
     info_t *send_info;
     int len;
 
-    errno = 0;
+    out->timer = 0;
     /* 发送http请求头到服务器 */
-    if (conf.udp.http_request_len > out->http_request_sent_len)
+    if (udp.http_request_len > out->http_request_sent_len)
     {
-        len = write(out->server_fd, conf.udp.http_request + out->http_request_sent_len, conf.udp.http_request_len - out->http_request_sent_len);
+        len = write(out->server_fd, udp.http_request + out->http_request_sent_len, udp.http_request_len - out->http_request_sent_len);
         if (len <= 0)
         {
             if (len == 0 || errno != EAGAIN)
@@ -191,7 +211,7 @@ static int sendToServer(info_t *out)
         if (len > 0)
         {
             out->http_request_sent_len += len;
-            if (conf.udp.http_request_len == out->http_request_sent_len)
+            if (udp.http_request_len == out->http_request_sent_len)
             {
                 udp_ev.data.ptr = out;
                 udp_ev.events = EPOLLIN|EPOLLET;
@@ -260,7 +280,7 @@ static int recvClient(info_t *client)
     msg.msg_controllen = sizeof(control);
     io.iov_base = client->client_data + sizeof(struct sockaddr_in) + sizeof(uint16_t);
     io.iov_len = CLIENT_BUFFER_SIZE;
-    client->client_data_len = recvmsg(conf.udp_listen_fd, &msg, 0);
+    client->client_data_len = recvmsg(global.udp_listen_fd, &msg, 0);
     if (client->client_data_len <= 0)
     {
         //perror("recvmsg()");
@@ -284,8 +304,10 @@ static int recvClient(info_t *client)
     memcpy(client->client_data, &client->toaddr, sizeof(struct sockaddr_in));
     memcpy(client->client_data + sizeof(struct sockaddr_in), &client->client_data_len, sizeof(uint16_t));
     client->client_data_len += sizeof(uint16_t) + sizeof(struct sockaddr_in);
-    if (conf.udp.encodeCode)
-        dataEncode(client->client_data, client->client_data_len, conf.udp.encodeCode);
+    if (udp.encodeCode)
+        dataEncode(client->client_data, client->client_data_len, udp.encodeCode);
+    if (udp.httpsProxy_encodeCode)
+        dataEncode(client->client_data, client->client_data_len, udp.httpsProxy_encodeCode);
 
     client->next = NULL;
 
@@ -294,6 +316,7 @@ static int recvClient(info_t *client)
 
 static void connectToServer(info_t *info)
 {
+    info->timer = 0;
     info->server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (info->server_fd < 0)
         return;
@@ -305,7 +328,7 @@ static void connectToServer(info_t *info)
         close(info->server_fd);
         info->server_fd = -1;
     }
-    else if (connect(info->server_fd, (struct sockaddr *)&conf.udp.dst, sizeof(conf.udp.dst)) != 0 && errno != EINPROGRESS)
+    else if (connect(info->server_fd, (struct sockaddr *)&udp.dst, sizeof(udp.dst)) != 0 && errno != EINPROGRESS)
     {
         epoll_ctl(udp_efd, EPOLL_CTL_DEL, info->server_fd, NULL);
         close(info->server_fd);
@@ -328,7 +351,7 @@ static int margeClient(info_t *client)
             client->server_fd = -2;  //保证下次调用margeClient()不匹配到这个结构体  并且不被其他客户端连接使用
             client->client_data_sent_len = sizeof(struct sockaddr_in);  //不再发送UDP目标地址
             //没有收到服务端回应前不发送UDP的数据
-            if (client_info_list[i].http_request_sent_len > conf.udp.http_request_len)
+            if (client_info_list[i].http_request_sent_len > udp.http_request_len)
             {
                 udp_ev.events = EPOLLIN|EPOLLOUT|EPOLLET;
                 udp_ev.data.ptr = client_info_list + i;
@@ -359,48 +382,47 @@ static void new_client()
 
 static void http_udp_req_init()
 {
-    char dest[22], *ip;
-    struct httpudp_conf *udp;
-    uint16_t port;
+    char dest[22];
 
-    udp = &conf.udp;
-    port = ntohs(udp->dst.sin_port);
-    ip = inet_ntoa(udp->dst.sin_addr);
-    sprintf(dest, "%s:%u", ip, port);
-    if (udp->http_request)
+    sprintf(dest, "%s:%u", inet_ntoa(udp.dst.sin_addr), ntohs(udp.dst.sin_port));
+    if (udp.http_request)
     {
-        udp->http_request_len = strlen(udp->http_request) + 2;
-        udp->http_request = (char *)realloc(udp->http_request, udp->http_request_len + 1);
-        if (udp->http_request == NULL)
+        udp.http_request_len = strlen(udp.http_request) + 2;
+        udp.http_request = (char *)realloc(udp.http_request, udp.http_request_len + 1);
+        if (udp.http_request == NULL)
             error("httpudp http request initializate failed.");
-        strcat(udp->http_request, "\r\n");
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "[V]", 3, "HTTP/1.1", 8);
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "[H]", 3, dest, strlen(dest));
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "\\0", 2, "\0", 1);
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "[M]", 3, "CONNECT", 7);
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "[url]", 5, "/", 1);
-        udp->http_request = replace(udp->http_request, &udp->http_request_len, "[U]", 3, "/", 1);
+        strcat(udp.http_request, "\r\n");
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[V]", 3, "HTTP/1.1", 8);
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[H]", 3, dest, strlen(dest));
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "\\0", 2, "\0", 1);
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[M]", 3, "CONNECT", 7);
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[url]", 5, "/", 1);
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[U]", 3, "/", 1);
     }
     else    /* 默认使用CONNECT请求 */
     {
-        tcp_t ssl;
-
-        ssl.host = NULL;
-        ssl.original_port = port;
-        ssl.original_dst.sin_addr.s_addr = inet_addr(ip);
-        if (make_ssl(&ssl) != 0)
-            error("httpudp https request initializate failed.");
-        udp->http_request = ssl.connect;
-        udp->http_request_len = ssl.connect_len;
-        if (conf.mode == WAP || conf.mode == WAP_CONNECT || ((conf.mode == NET_PROXY || conf.mode == NET_CONNECT) && port != 80 && port != 8080))
-            memcpy(&udp->dst, &conf.https.dst, sizeof(udp->dst));
+        if (https.encodeCode)
+        {
+            dataEncode(dest, strlen(dest), https.encodeCode);
+            udp.httpsProxy_encodeCode = https.encodeCode;
+        }
+        udp.http_request_len = default_ssl_request_len;
+        copy_new_mem(default_ssl_request, default_ssl_request_len, &udp.http_request);
+        udp.http_request = replace(udp.http_request, &udp.http_request_len, "[H]", 3, dest, strlen(dest));
+        memcpy(&udp.dst, &https.dst, sizeof(udp.dst));
     }
-
-    if (udp->http_request == NULL)
+    if (udp.http_request == NULL)
         error("out of memory.");
+    /* 保存原始生成的请求头，配合usr_hdr使用 */
+    if (saveHdrs)
+    {
+        if (copy_new_mem(udp.http_request, udp.http_request_len, &udp.original_http_request) != 0)
+            error("out of memory.");
+        udp.original_http_request_len = udp.http_request_len;
+    }
 }
 
-static void udp_init()
+void udp_init()
 {
     int i;
 
@@ -418,23 +440,22 @@ static void udp_init()
         exit(1);
     }
     //添加监听socket到epoll
-    fcntl(conf.udp_listen_fd, F_SETFL, O_NONBLOCK);
-    udp_ev.data.fd = conf.udp_listen_fd;
+    fcntl(global.udp_listen_fd, F_SETFL, O_NONBLOCK);
+    udp_ev.data.fd = global.udp_listen_fd;
     udp_ev.events = EPOLLIN;
-    epoll_ctl(udp_efd, EPOLL_CTL_ADD, conf.udp_listen_fd, &udp_ev);
+    epoll_ctl(udp_efd, EPOLL_CTL_ADD, global.udp_listen_fd, &udp_ev);
 }
 
 void *udp_loop(void *nullPtr)
 {
     int n;
 
-    udp_init();
     while (1)
     {
         n = epoll_wait(udp_efd, udp_evs, MAX_CLIENT_INFO * 2 + 1, -1);
         while (n-- > 0)
         {
-            if (udp_evs[n].data.fd == conf.udp_listen_fd)
+            if (udp_evs[n].data.fd == global.udp_listen_fd)
             {
                 new_client();
             }

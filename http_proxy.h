@@ -3,9 +3,11 @@
 
 #include <netinet/in.h>
 #include <sys/epoll.h>
+#include <time.h>
 #include "main.h"
 
 #define CONNECT_HEADER "CONNECT [H] HTTP/1.1\r\n\r\n"
+
 /* 数据类型 */
 #define OTHER 1
 #define HTTP 2
@@ -29,13 +31,13 @@ typedef struct connection {
     char *host;
     char *connect; //存放CONNECT请求
     int connect_len; //CONNECT请求的长度
-    int incomplete_data_len, ready_data_len, sent_len, fd;
+    int incomplete_data_len, ready_data_len, sent_len, fd, timer;
     uint16_t original_port;
-    unsigned reqType :3; //请求类型
-    unsigned connType :1; //判断是客户端还是服务端
-    unsigned first_connection :1; //发送客户端数据前是否首先进行CONNECT连接
+    unsigned reqType :3, //请求类型
+        first_connection :1; //发送客户端数据前是否首先进行CONNECT连接
 } tcp_t;
 
+extern void tcp_timeout_check();
 extern int tcp_listen(char *ip, int port);
 extern void tcp_init();
 extern void tcp_loop();

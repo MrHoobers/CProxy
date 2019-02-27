@@ -1,7 +1,27 @@
 #include "http_request.h"
 
-char * default_ssl_request;
-int  default_ssl_request_len;
+struct tcp_mode http, https;
+struct save_header *saveHdrs;
+char *default_ssl_request, *original_default_ssl_request;
+int  default_ssl_request_len, original_default_ssl_request_len;
+
+/* 保存头域计时器，超时后才更新头域的值 */
+void *save_header_timer(void *nullPtr)
+{
+    struct save_header *ptr;
+
+    while (1)
+    {
+        sleep(60);
+        for (ptr = saveHdrs; ptr; ptr = ptr->next)
+        {
+            if (ptr->timer == 0)
+                ptr->notUpdate = 0;
+            else
+                ptr->timer--;
+        }
+    }
+}
 
 /* 判断请求类型 */
 uint8_t request_type(char *req)
@@ -26,50 +46,47 @@ uint8_t request_type(char *req)
         return OTHER;
 }
 
-/* 返回状态信息 */
-static void rsp_stats_msg(tcp_t *client, char *host)
-{
-    #define STATUS_REQUEST "HTTP/1.0 200 OK\r\n"\
-        "Content-Type: text/plain; charset=utf-8\r\n"\
-        "\r\n"\
-        "ChameleonProxy(" VERSION ") is running\r\n\r\n"\
-        "HTTP:\r\n[HTTP]\r\nHTTPS:\r\n[HTTPS]"
-    tcp_t https;
-    char *rsp_msg;
-    int rsp_msg_len;
-
-    https.original_port = tcp_listen_port;
-    https.host = host;
-    if (make_ssl(&https) != 0)
-        return;
-    rsp_msg_len = strlen(STATUS_REQUEST);
-    rsp_msg = replace(strdup(STATUS_REQUEST), &rsp_msg_len, "[HTTP]", 6, client->ready_data, client->ready_data_len);
-    rsp_msg = replace(rsp_msg, &rsp_msg_len, "[HTTPS]", 7, https.connect, https.connect_len);
-    if (rsp_msg)
-    {
-        write(client->fd, rsp_msg, rsp_msg_len);
-        free(rsp_msg);
-    }
-    free(https.connect);
-}
-
 /* 将ip和端口用:拼接 */
-static char *splice_ip_port(char *ip, uint16_t port)
+static char *splice_ip_port(struct in_addr ip, uint16_t port)
 {
-    static char original_ip_port[22];
-    char *p;
-    uint8_t a_unit, ip_len;
+    static char original_ip_port[22], *ip_ptr;
 
-    strcpy(original_ip_port, ip);
-    ip_len = strlen(ip);
-    original_ip_port[ip_len] = ':';
-    p = original_ip_port + ip_len + 6;
-    *p = '\0';
-    for (a_unit = port % 10; port > 0; port /= 10, a_unit = port % 10)
-        *(--p) = a_unit + 48;
-    strcpy(original_ip_port + ip_len + 1, p);
+    ip_ptr = (char *)&ip;
+    sprintf(original_ip_port, "%u.%u.%u.%u:%u", ip_ptr[0], ip_ptr[1], ip_ptr[2], ip_ptr[3], port);
 
     return original_ip_port;
+}
+
+/* 替换字符串中的use_hdr语法 */
+static void safe_useHdr_replace(char *src, int src_len, char **save_ptr, int *save_len_ptr)
+{
+    if (src == NULL)
+        return;
+
+    struct save_header *sh_p;
+    char *new_data, *free_ptr;
+    int new_data_len;
+
+    if (copy_new_mem(src, src_len, &new_data) != 0)
+        return;
+    new_data_len = src_len;
+    for (sh_p = saveHdrs; sh_p; sh_p = sh_p->next)
+        new_data = replace(new_data, &new_data_len, sh_p->replace_string, sh_p->replace_string_len, sh_p->value, sh_p->value_len);
+    if (new_data == NULL)
+        return;
+    /* 判断防止越界 */
+    free_ptr = *save_ptr;
+    if (new_data_len > *save_len_ptr)
+    {
+        *save_ptr = new_data;
+        *save_len_ptr = new_data_len;
+    }
+    else
+    {
+        *save_len_ptr = new_data_len;
+        *save_ptr = new_data;
+    }
+    free(free_ptr);
 }
 
 /* 构建CONNECT请求头 */
@@ -96,19 +113,56 @@ int8_t make_ssl(tcp_t *ssl)
     }
     else
     {
-        host = splice_ip_port(inet_ntoa(ssl->original_dst.sin_addr), ssl->original_port);
+        host = splice_ip_port(ssl->original_dst.sin_addr, ssl->original_port);
         host_len = strlen(host);
     }
-    ssl->connect = (char *)malloc(default_ssl_request_len + 1);
-    if (ssl->connect == NULL)
+    if (https.encodeCode)
+        dataEncode(host, host_len, https.encodeCode);
+    if (copy_new_mem(default_ssl_request, default_ssl_request_len, &ssl->connect) != 0)
         return 1;
-    strcpy(ssl->connect, default_ssl_request);
     ssl->connect_len = default_ssl_request_len;
     ssl->connect = replace(ssl->connect, &ssl->connect_len, "[H]", 3, host, host_len);
     if (ssl->connect == NULL)
         return 1;
 
     return 0;
+}
+
+/* 返回状态信息 */
+static void rsp_stats_msg(tcp_t *client, char *host)
+{
+    #define STATUS_RESPONSE_HEADER "HTTP/1.0 200 OK\r\n"\
+        "Content-Type: text/plain; charset=utf-8\r\n"\
+        "\r\n"\
+        "ChameleonProxy(" VERSION ") is running\r\n\r\n"
+    tcp_t https;
+
+    write(client->fd, STATUS_RESPONSE_HEADER, sizeof(STATUS_RESPONSE_HEADER) - 1);
+    /* 返回http请求头 */
+    write(client->fd, "HTTP:\r\n", 7);
+    write(client->fd, client->ready_data, client->ready_data_len);
+    /* 返回https请求头 */
+    write(client->fd, "HTTPS:\r\n", 8);
+    https.original_port = tcp_listen_port;
+    https.host = host;
+    make_ssl(&https) == 0 ? \
+        write(client->fd, https.connect, https.connect_len) : \
+        write(client->fd, "(null)\r\n\r\n", 10);
+    free(https.connect);
+    /* 返回httpDNS请求头 */
+    write(client->fd, "httpDNS(https):\r\n", 17);
+    httpdns.connect_request ? \
+        write(client->fd, httpdns.connect_request, httpdns.connect_request_len) : \
+        write(client->fd, "(null)\r\n\r\n", 10);
+    write(client->fd, "httpDNS(http):\r\n", 16);
+    httpdns.http_req ? \
+        write(client->fd, httpdns.http_req, httpdns.http_req_len) : \
+        write(client->fd, "(null)\r\n\r\n", 10);
+    /* 返回httpUDP请求头 */
+    write(client->fd, "httpUDP:\r\n", 10);
+    udp.http_request ? \
+        write(client->fd, udp.http_request, udp.http_request_len) : \
+        write(client->fd, "(null)\r\n\r\n", 10);
 }
 
 /* 释放http_request结构体占用的内存 */
@@ -124,8 +178,7 @@ static void free_http_request(struct http_request *http_req)
 /* 关键字替换 */
 static char *keywords_replace(char *str, int *str_len, unsigned reqType, struct http_request *http_req)
 {
-    if (str == NULL)
-        return NULL;
+    safe_useHdr_replace(str, *str_len, &str, str_len);
     if (reqType != HTTP_CONNECT)
     {
         str = replace(str, str_len, "[M]", 3, http_req->method, strlen(http_req->method));
@@ -134,6 +187,7 @@ static char *keywords_replace(char *str, int *str_len, unsigned reqType, struct 
         str = replace(str, str_len, "[V]", 3, http_req->version, 8);
     }
     str = replace(str, str_len, "[H]", 3, http_req->host, strlen(http_req->host));
+    str = replace(str, str_len, "[0]", 3, "\0", 1);
 
     return str;
 }
@@ -142,8 +196,12 @@ static char *keywords_replace(char *str, int *str_len, unsigned reqType, struct 
 /* 正则表达式字符串替换，str为可用free释放的指针 */
 static char *regrep(char *str, int *str_len, const char *src, char *dest, int dest_len)
 {
+    //修改请求头出问题，不进行代理
     if (!str || !src || !dest)
+    {
+        free(str);
         return NULL;
+    }
 
     regmatch_t pm[10];
     regex_t reg;
@@ -154,14 +212,12 @@ static char *regrep(char *str, int *str_len, const char *src, char *dest, int de
     regcomp(&reg, src, REG_NEWLINE|REG_ICASE|REG_EXTENDED);
     while (regexec(&reg, p, 10, pm, 0) == 0)
     {
-        real_dest = (char *)malloc(dest_len);
-        if (real_dest == NULL)
+        if (copy_new_mem(dest, dest_len, &real_dest) != 0)
         {
             regfree(&reg);
             free(str);
             return NULL;
         }
-        memcpy(real_dest, dest, dest_len);
         real_dest_len = dest_len;
         //不进行不必要的字符串操作
         if (pm[1].rm_so >= 0)
@@ -187,7 +243,7 @@ static char *regrep(char *str, int *str_len, const char *src, char *dest, int de
         {
             memcpy(p, real_dest, real_dest_len);
             if (match_len > real_dest_len)
-                strcpy(p + real_dest_len, p + match_len);
+                memmove(p + real_dest_len, p + match_len, *str_len - (p + match_len - str) + 1);  //+1是复制后面的\0
             p += real_dest_len;
             *str_len -= match_len - real_dest_len;
         }
@@ -222,8 +278,7 @@ static char *regrep(char *str, int *str_len, const char *src, char *dest, int de
 /* 在请求头中获取host */
 static char *get_host(char *header, unsigned reqType)
 {
-    char *key, *host, *key_end, *host_end;
-    unsigned int key_len;
+    char *key, *host, *host_end;
 
     if (reqType == HTTP_CONNECT)
     {
@@ -234,23 +289,16 @@ static char *get_host(char *header, unsigned reqType)
     }
 
     host = NULL;
-    for (key = strchr(header, '\n'); key++; key = strchr(key_end, '\n'))
+    for (key = strchr(header, '\n'); key++; key = strchr(key, '\n'))
     {
-        key_end = strchr(key, ':');
-        if (key_end == NULL)
-            break;
-        //部分请求头一行开头为:
-        key_len = key_end - key;
-        if (key_len <= 0)
-            continue;
-        if (strncasecmp(key, "x-online-host", key_len) == 0)
+        if (strncasecmp(key, "x-online-host:", 14) == 0)
         {
-            host = key_end + 1;
+            host = key + 14;
             break;
         }
-        else if (strncasecmp(key, "host", key_len) == 0)
+        else if (strncasecmp(key, "host:", 5) == 0)
         {
-            host = key_end + 1;
+            host = key + 5;
         }
     }
     if (host == NULL)
@@ -258,33 +306,24 @@ static char *get_host(char *header, unsigned reqType)
     while (*host == ' ')
         host++;
     host_end = strchr(host, '\r');
-    if (host_end)
-        return strndup(host, host_end - host);
-    else
-        return strdup(host);
+    return host_end ? strndup(host, host_end - host) : strdup(host);
 }
 
 /* 删除请求头中的头域，并更新header_len的值 */
 static void del_hdr(char *header, int *header_len, struct modify *head)
 {
     struct modify *m;
-    char *key_end, *line_begin, *line_end;
-    unsigned int key_len;
+    char *line_begin, *line_end;
 
-    for (line_begin = memchr(header, '\n', *header_len); line_begin; line_begin = line_end)
+    for (line_begin = memchr(header, '\n', *header_len); line_begin++; line_begin = line_end)
     {
-        key_end = strchr(++line_begin, ':');
-        if (key_end == NULL)
-            return;
-        key_len = key_end - line_begin;
-        line_end = memchr(key_end, '\n', *header_len - (key_end - header));
+        line_end = memchr(line_begin, '\n', *header_len - (line_begin - header));
         m = head;
         do {
-            if (key_len == m->del_hdr_len && strncasecmp(line_begin, m->del_hdr, key_len) == 0)
+            if (strncasecmp(line_begin, m->del_hdr, m->del_hdr_len) == 0 && line_begin[m->del_hdr_len] == ':')
             {
                 if (line_end)
                 {
-                    //strcpy(line_begin, line_end + 1);
                     memmove(line_begin, line_end + 1, *header_len - ((line_end + 1 - header)));
                     *header_len -= (line_end + 1) - line_begin;
                     header[*header_len] = '\0';
@@ -299,6 +338,34 @@ static void del_hdr(char *header, int *header_len, struct modify *head)
                 break;
             }
         } while ((m = m->next) != NULL && m->flag == DEL_HDR);
+    }
+}
+
+/* 更新struct save_header结构体和httpdns httpudp的请求头 */
+static void update_new_hdr(char *header, int header_len, struct save_header *sh_p)
+{
+    char *line_begin, *line_end, *value;
+
+    for (line_begin = memchr(header, '\n', header_len); line_begin++; line_begin = line_end)
+    {
+        line_end = memchr(line_begin, '\n', header_len - (line_begin - header));
+        if (strncasecmp(line_begin, sh_p->key, sh_p->key_len) == 0 && line_begin[sh_p->key_len] == ':')
+        {
+            for (value = line_begin + sh_p->key_len + 1; *value == ' '; value++);
+            line_end ? (sh_p->value_len = line_end - value - 1) : (sh_p->value_len = strlen(value));
+            free(sh_p->value);
+            if (copy_new_mem(value, sh_p->value_len, &sh_p->value) != 0)
+                return;
+            if (sh_p->updateTime > 0)
+            {
+                sh_p->timer = sh_p->updateTime;
+                sh_p->notUpdate = 1;
+            }
+            safe_useHdr_replace(httpdns.original_http_req, httpdns.original_http_req_len, &httpdns.http_req, &httpdns.http_req_len);
+            safe_useHdr_replace(httpdns.original_connect_request, httpdns.original_connect_request_len, &httpdns.connect_request, &httpdns.connect_request_len);
+            safe_useHdr_replace(udp.original_http_request, udp.original_http_request_len, &udp.http_request, &udp.http_request_len);
+            safe_useHdr_replace(original_default_ssl_request, original_default_ssl_request_len, &default_ssl_request, &default_ssl_request_len);
+        }
     }
 }
 
@@ -328,11 +395,30 @@ static int http_request_header(char *request, int request_len, tcp_t *client, st
         http_req->header_len = request_len;
     }
     http_req->host = get_host(http_req->header, client->reqType);
+    /* 如果请求头中包含Host，则设置Host中的端口为第四层目标端口 */
+    if (http_req->host)
+    {
+        p = strchr(http_req->host, ':');
+        if (client->original_port != 0 && client->original_port != (p ? atoi(p + 1) : 80))
+        {
+            http_req->host = (char *)realloc(http_req->host, p ? (p - http_req->host + 7) : (strlen(http_req->host) + 7));
+            if (http_req->host == NULL)
+                return 1;
+            p ? sprintf(p+1, "%u", client->original_port) : sprintf(http_req->host, "%s:%u", http_req->host, client->original_port);
+        }
+    }
      //如果请求头中没有Host，则设置为原始IP和端口
-    if (http_req->host == NULL)
-        http_req->host = strdup(splice_ip_port(inet_ntoa(client->original_dst.sin_addr), client->original_port));
+    else
+        http_req->host = strdup(splice_ip_port(client->original_dst.sin_addr, client->original_port));
     if (client->reqType == HTTP_CONNECT)
+    {
+        if (https.encodeCode)
+        {
+            dataEncode(http_req->host, strlen(http_req->host), https.encodeCode);
+            dataEncode(http_req->other, http_req->other_len, https.encodeCode);
+        }
         return 0;
+    }
 
 
     /*获取method url version*/
@@ -353,18 +439,15 @@ static int http_request_header(char *request, int request_len, tcp_t *client, st
         if (*http_req->url != '/' && (p = strstr(http_req->url, "//")) != NULL)
         {
             p = strchr(p+2, '/');
-            if (p)
-                http_req->uri = p;
-            else
-                http_req->uri = "/";
+            http_req->uri = p ? p : "/";
         }
         else
         {
             http_req->uri = http_req->url;
-            //有些url是//开头
-            /*while (*(http_req->uri+1) == '/')
-                http_req->uri++;*/
         }
+        if (http.uri_strict)
+            for (p = strstr(http_req->uri, "//"); p; p = strstr(p, "//"))
+                memmove(p, p+1, strlen(p+1)+1);
     }
 
     return 0;
@@ -381,11 +464,16 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
     char *p, *new_header, *first, *src, *dest;
     int first_len, src_len, dest_len;
 
+    if (https.encodeCode && client->reqType != HTTP_CONNECT)
+    {
+        dataEncode(request, request_len, https.encodeCode);
+        client->reqType = OTHER;
+    }
     //判断数据类型
     switch(client->reqType)
     {
         case HTTP_OTHERS:
-            if (conf.http_only_get_post)
+            if (http.http_only_get_post)
             {
                 free(request);
                 return 1;
@@ -393,11 +481,11 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
             //不禁止其他http请求则进行http处理
 
         case HTTP:
-            mod = conf.http.m;
+            mod = http.m;
         break;
 
         case HTTP_CONNECT:
-            mod = conf.https.m;
+            mod = https.m;
         break;
 
         //不是http请求头，直接拼接到client->ready_data
@@ -441,9 +529,15 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
                     mod = mod->next;
             break;
 
+            case SAVE_HDR:
+                if (mod->saveHdr->notUpdate == 0)
+                    update_new_hdr(http_req.header, http_req.header_len, mod->saveHdr);
+            break;
+
             case SET_FIRST:
                 first_len = mod->first_len;
-                first = keywords_replace(strdup(mod->first), &first_len, client->reqType, &http_req);
+                copy_new_mem(mod->first, first_len, &first);
+                first = keywords_replace(first, &first_len, client->reqType, &http_req);
                 if (first == NULL)
                     goto error;
                 p = memchr(http_req.header, '\n', http_req.header_len);
@@ -483,8 +577,10 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
                 default:
                     src_len = mod->src_len;
                     dest_len = mod->dest_len;
-                    src = keywords_replace(strdup(mod->src), &src_len, client->reqType, &http_req);
-                    dest = keywords_replace(strdup(mod->dest), &dest_len, client->reqType, &http_req);
+                    copy_new_mem(mod->src, src_len, &src);
+                    copy_new_mem(mod->dest, dest_len, &dest);
+                    src = keywords_replace(src, &src_len, client->reqType, &http_req);
+                    dest = keywords_replace(dest, &dest_len, client->reqType, &http_req);
                     if (mod->flag == STRREP)
                         http_req.header = replace(http_req.header, &http_req.header_len, src, src_len, dest, dest_len);
                     else  //正则替换
@@ -504,8 +600,8 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
         p = (char *)realloc(client->ready_data, client->ready_data_len + http_req.header_len);
         if (p == NULL)
             goto error;
-        client->ready_data = p;
         memcpy(p + client->ready_data_len, http_req.header, http_req.header_len);
+        client->ready_data = p;
         client->ready_data_len += http_req.header_len;
     }
     else
@@ -517,7 +613,7 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
     if (http_req.other)
     {
         //严格模式，修改所有请求头
-        if (conf.strict_modify)
+        if (global.strict_modify)
         {
             int8_t type = client->reqType;
             client->reqType = request_type(http_req.other);
