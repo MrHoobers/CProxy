@@ -23,8 +23,8 @@ Android-ndk:
 
 
 ### 适配服务器程序:  
-    &nbsp;&nbsp;&nbsp;&nbsp;SpecialProxy(http代理): https://github.com/mmmdbybyd/SpecialProxy  
-    &nbsp;&nbsp;&nbsp;&nbsp;udpServer(httpUDP代理): https://github.com/mmmdbybyd/CProxy/udpServer/udpServer.c  
+&nbsp;&nbsp;&nbsp;&nbsp;SpecialProxy(http代理): https://github.com/mmmdbybyd/SpecialProxy  
+&nbsp;&nbsp;&nbsp;&nbsp;udpServer(httpUDP代理): https://github.com/mmmdbybyd/CProxy/udpServer/udpServer.c  
 ~~~~~
     #udpServer(httpUDP) -l 监听端口 -e 加密编码  
     udpServer -l 8000 -e 170  
