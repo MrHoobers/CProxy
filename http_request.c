@@ -399,7 +399,7 @@ static int http_request_header(char *request, int request_len, tcp_t *client, st
     if (http_req->host)
     {
         p = strchr(http_req->host, ':');
-        if (client->original_port != 0 && client->original_port != (p ? atoi(p + 1) : 80))
+        if (client->original_port != 0 && client->original_port != tcp_listen_port && client->original_port != (p ? atoi(p + 1) : 80))
         {
             http_req->host = (char *)realloc(http_req->host, p ? (p - http_req->host + 7) : (strlen(http_req->host) + 7));
             if (http_req->host == NULL)
