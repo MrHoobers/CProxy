@@ -23,8 +23,8 @@
 #include <linux/netfilter_ipv4.h>
 
 #define WEB_SOCKET_RSP "HTTP/1.1 101 Switching Protocols\r\nUpgrade:  websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ChameleonProxy httpUDP Server\r\nVia: ChameleonProxy httpUDP Server\r\n\r\n"
-#define HTTP_RSP "HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nVia: ChameleonProxy httpUDP Server\r\n\r\n"
-#define SSL_RSP "HTTP/1.1 200 Connection established\r\nConnection: Keep-Alive\r\nVia: ChameleonProxy httpUDP Server\r\n\r\n"
+#define HTTP_RSP "HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nContent-Length: 999999999\r\nServer: ChameleonProxy httpUDP Server\r\n\r\n"
+#define SSL_RSP "HTTP/1.1 200 Connection established\r\nConnection: Keep-Alive\r\nServer: ChameleonProxy httpUDP Server\r\n\r\n"
 #define BUFFER_SIZE 4096+65535
 #define DEFAULT_TIMEOUT_S 20
 #define DEFAULT_THEAD_POOL_SIZE 30
