@@ -13,7 +13,7 @@
 #include <errno.h>
 #include "main.h"
 
-#define VERSION "2.0" //"beta" " " __DATE__ " " __TIME__
+#define VERSION "2.0.1" //"beta" " " __DATE__ " " __TIME__
 
 extern char *replace(char *str, int *str_len, const char *src, const int src_len, const char *dest, const int dest_len);
 extern void error(const char *msg);

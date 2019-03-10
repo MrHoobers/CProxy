@@ -109,6 +109,7 @@ static int8_t create_connect(tcp_t *client, tcp_t *server)
             return 1;
         if (client->reqType != HTTP_CONNECT && make_ssl(client) != 0)
             return 1;
+        client->is_httpsProxy = 1;
     }
     //[wap HTTP数据]/[net_proxy HTTP非80 8080端口]
     else if (global.mode == WAP || (global.mode == NET_PROXY && client->original_port != 80 && client->original_port != 8080))
@@ -220,11 +221,14 @@ static void handleClient(tcp_t *client)
                 }
                 free(client->connect);
                 client->connect = NULL;
-                client->connect_len = 0;
+                client->connect_len = client->is_httpsProxy = 0;
             }
         }
     }
 
+    /* 对SSL代理数据进行编码 */
+    if (client->is_httpsProxy && https.encodeCode && client->reqType != HTTP_CONNECT)
+        dataEncode(client->ready_data, client->ready_data_len, https.encodeCode);
     //核心自带SSL处理必须收到CONNECT回应后才能发送客户端数据
     //只有收到http请求和CONNECT握手完成，client->connect_len才会为0
     if (client->connect_len == 0)
@@ -265,7 +269,7 @@ static void serverToClient(tcp_t *server)
             }
             return;
         }
-        if (https.encodeCode)
+        if (https.encodeCode && client->is_httpsProxy)
             serverRsp_encode(client, server);
         write_len = write(client->fd, server->ready_data, server->ready_data_len);
         if (write_len == 0 || (write_len == -1 && errno != EAGAIN))
@@ -463,7 +467,7 @@ static void accept_client()
         return;
     }
     //读取客户端数据前首先建立连接
-    if (client->original_port != 80 && client->original_port != 8080 && client->original_port != tcp_listen_port)
+    if (((client->original_port != 80 && client->original_port != 8080) || global.mode == WAP_CONNECT) && client->original_port != tcp_listen_port)
     {
         server = client + 1;
         server->fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -485,7 +489,7 @@ static void accept_client()
             close_connection(client);
             return;
         }
-        client->first_connection = 1;
+        client->first_connection = client->is_httpsProxy = 1;
     }
 }
 

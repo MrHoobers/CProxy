@@ -351,7 +351,7 @@ static int8_t parse_tcp_module(char *content, struct tcp_mode *tcp,int8_t https)
         }
         else if (strncasecmp(var, "encode", 6) == 0)
         {
-            tcp->encodeCode = atoi(val_begin);
+            tcp->encodeCode = (unsigned)atoi(val_begin);
         }
         if (m->flag == 0)
         {
@@ -414,7 +414,7 @@ static int8_t parse_httpdns_module(char *content)
         }
         else if (strcasecmp(var, "encode") == 0)
         {
-            httpdns.encodeCode = (int8_t)atoi(val_begin);
+            httpdns.encodeCode = (unsigned)atoi(val_begin);
         }
 
         content = strchr(lineEnd+1, '\n');
@@ -449,7 +449,7 @@ static int8_t parse_httpudp_module(char *content)
         }
         else if (strcasecmp(var, "encode") == 0)
         {
-            udp.encodeCode = (int8_t)atoi(val_begin);
+            udp.encodeCode = (unsigned)atoi(val_begin);
         }
 
         content = strchr(lineEnd+1, '\n');

@@ -100,9 +100,10 @@ CProxy 1.9 (2019-02-18)
     修复dns和udp偶尔出现addr语法混淆问题
     自带CONNECT协议更规范
 
-CProxy 2.0
+CProxy 2.0 (2019-03-10)
     httpDNS和httpUDP使用http_req语法后，不受wap_connect和net_connect影响
     wap_connect的编码加密支持CONNECT直接连接到监听端口
     修复TCPDNS在编码模式下错误缓存
     支持TCPDNS不做CONNECT代理(不使用tcp_listen或者http_req = "";)
     兼容部分不规范的http协议，如果第四层的端口跟请求头Host端口不一致，[H]会自动修改为第四层的端口
+    编码功能只编码走HTTPS模块的数据

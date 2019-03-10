@@ -187,7 +187,6 @@ static char *keywords_replace(char *str, int *str_len, unsigned reqType, struct 
         str = replace(str, str_len, "[V]", 3, http_req->version, 8);
     }
     str = replace(str, str_len, "[H]", 3, http_req->host, strlen(http_req->host));
-    str = replace(str, str_len, "[0]", 3, "\0", 1);
 
     return str;
 }
@@ -464,11 +463,6 @@ int8_t modify_request(char *request, int request_len, tcp_t *client)
     char *p, *new_header, *first, *src, *dest;
     int first_len, src_len, dest_len;
 
-    if (https.encodeCode && client->reqType != HTTP_CONNECT)
-    {
-        dataEncode(request, request_len, https.encodeCode);
-        client->reqType = OTHER;
-    }
     //判断数据类型
     switch(client->reqType)
     {

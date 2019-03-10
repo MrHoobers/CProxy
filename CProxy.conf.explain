@@ -1,6 +1,6 @@
 分为5个模块：global、http、https、httpdns、httpudp
 encode语法：encode = number;对字符的ascii码加或者减number，使用时请避开特殊字符(推荐128-255)
-    tcp在https模块设置，只有wap_connect有效，编码域名以及传输的数据
+    tcp在https模块设置，只有走HTTPS模块的数据有效，编码[H]以及传输的数据
     httpDNS只编码域名和返回的ip
     httpUDP编码传输的数据
 http和https模块的save_hdr set_first del_hdr strrep regrep语法从上往下执行

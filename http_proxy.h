@@ -34,7 +34,8 @@ typedef struct connection {
     int incomplete_data_len, ready_data_len, sent_len, fd, timer;
     uint16_t original_port;
     unsigned reqType :3, //请求类型
-        first_connection :1; //发送客户端数据前是否首先进行CONNECT连接
+        first_connection :1, //发送客户端数据前是否首先进行CONNECT连接
+        is_httpsProxy :1;  //如果真 则表示连接是走HTTPS模块
 } tcp_t;
 
 extern void tcp_timeout_check();

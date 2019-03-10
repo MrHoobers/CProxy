@@ -137,7 +137,7 @@ static void server_init()
         exit(1);
     }
     #ifndef DEBUG
-    if (daemon(1, 0) == -1)
+    if (daemon(1, 1) == -1)
     {
         perror("daemon");
         exit(1);

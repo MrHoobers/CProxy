@@ -381,17 +381,16 @@ static void handle_httpDNS_rsp(dns_t *dns, char *rsp, int rsp_len)
         //部分代理服务器使用长连接，第二次读取数据才读到域名的IP
         if (rsp_len <= 0)
             return;
+        rsp = p;
     }
-    else
-        p = rsp;
     if (httpdns.encodeCode)
-        dataEncode(p, rsp_len, httpdns.encodeCode);
+        dataEncode(rsp, rsp_len, httpdns.encodeCode);
     do {
         if (*rsp == '\n')
             rsp++;
         /* 匹配IP */
-        if (*rsp  > 57 || *rsp < 49)
-            continue;
+        while ((*rsp  > 57 || *rsp < 49) && *rsp != '\0')
+            rsp++;
         for (i = 0, ip_ptr = rsp, rsp = strchr(ip_ptr, '.'); ; ip_ptr = rsp + 1, rsp = strchr(ip_ptr, '.'))
         {
             if (i < 3)
